@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Love Letter - Web Edition</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="style.css">
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 </head>
 <body>
@@ -22,14 +22,26 @@
             <h2>Multiplayer Setup</h2>
             <div id="peer-id-display">Connecting to network...</div>
             <div class="mp-controls">
-                <input type="text" id="remote-id-input" placeholder="Enter Friend's ID">
+                <input type="text" id="remote-id-input" placeholder="Enter Host ID">
                 <button onclick="joinGame()">Join Game</button>
             </div>
             <div class="divider">OR</div>
             <div class="mp-controls">
-                <button onclick="hostGame()">Host Game (Wait for join)</button>
+                <button onclick="hostGame()">Host Game</button>
             </div>
             <button class="back-btn" onclick="showMainMenu()">Back</button>
+        </div>
+
+        <div id="lobby-screen" class="screen hidden">
+            <h2>Lobby</h2>
+            <div id="lobby-details">
+                <p id="lobby-status">Waiting for players...</p>
+                <div id="lobby-player-list"></div>
+            </div>
+            <div class="mp-controls">
+                <button id="lobby-start-btn" onclick="startGame('multi')" class="hidden">Start Game</button>
+            </div>
+            <button class="back-btn" onclick="showMainMenu()">Leave</button>
         </div>
 
         <div id="game-screen" class="screen hidden">
@@ -64,6 +76,6 @@
             </div>
         </div>
     </div>
-    <script src="game.js"></script>
+    <script src="script.js"></script>
 </body>
 </html>

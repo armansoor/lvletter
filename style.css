@@ -1,68 +1,149 @@
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Lato:wght@400;700&display=swap');
+
 :root {
-    --bg-color: #2c3e50;
-    --card-bg: #ecf0f1;
-    --accent: #e74c3c;
-    --text-color: white;
+    --bg-color: #2b1d0e; /* Dark Wood */
+    --text-color: #f4e4bc; /* Parchment Text */
+    --accent-gold: #d4af37;
+    --accent-red: #8b0000;
+    --card-bg: #fdf5e6; /* Old Paper */
+    --card-border: #4a3b2a;
+    --overlay-bg: rgba(0, 0, 0, 0.85);
 }
 
 body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-family: 'Lato', sans-serif;
     background-color: var(--bg-color);
+    background-image: radial-gradient(circle at center, #3e2b1f 0%, #1a1109 100%);
     color: var(--text-color);
     margin: 0;
-    overflow: hidden; /* Prevent scrolling on mobile */
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    justify-content: center;
 }
 
+h1, h2, h3 {
+    font-family: 'Cinzel', serif;
+    color: var(--accent-gold);
+    text-shadow: 2px 2px 4px #000;
+    margin: 10px 0;
+}
+
+/* Screens */
 .screen {
     display: none;
-    height: 100vh;
     flex-direction: column;
     align-items: center;
     justify-content: center;
+    width: 100%;
+    max-width: 800px;
+    height: 100%;
     padding: 20px;
+    box-sizing: border-box;
 }
 
 .screen.active { display: flex; }
 
-h1 { font-size: 3rem; color: var(--accent); text-shadow: 2px 2px 0 #000; }
-
+/* Buttons */
 button {
-    background: var(--accent);
-    color: white;
-    border: none;
+    background: linear-gradient(to bottom, #8b0000, #5a0000);
+    border: 2px solid var(--accent-gold);
+    color: var(--accent-gold);
     padding: 12px 24px;
     margin: 10px;
+    font-family: 'Cinzel', serif;
     font-size: 1.1rem;
     cursor: pointer;
     border-radius: 5px;
-    transition: transform 0.1s;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.5);
+    transition: all 0.2s;
 }
 
-button:hover { transform: scale(1.05); }
-button:disabled { background: #7f8c8d; cursor: not-allowed; }
+button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 8px rgba(0,0,0,0.6);
+    filter: brightness(1.2);
+}
 
-/* Game Board Layout */
-#game-screen { justify-content: space-between; padding: 10px; }
+button:disabled {
+    background: #444;
+    border-color: #666;
+    color: #888;
+    cursor: not-allowed;
+    transform: none;
+}
 
+.back-btn {
+    background: transparent;
+    border: 1px solid #666;
+    color: #888;
+}
+
+/* Inputs */
+input[type="text"] {
+    padding: 10px;
+    border-radius: 5px;
+    border: 1px solid var(--accent-gold);
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    font-family: 'Lato', sans-serif;
+    text-align: center;
+    width: 200px;
+}
+
+/* Game Layout */
+#game-screen {
+    justify-content: flex-start; /* Align top */
+    padding-top: 10px;
+}
+
+#game-info {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    padding: 0 10px;
+    font-family: 'Cinzel', serif;
+    color: var(--accent-gold);
+    font-size: 1.2rem;
+}
+
+/* Opponents */
 #opponents-container {
     display: flex;
-    gap: 10px;
-    width: 100%;
+    flex-wrap: wrap;
     justify-content: center;
+    gap: 15px;
+    margin-top: 20px;
+    width: 100%;
 }
 
 .opponent {
-    background: rgba(0,0,0,0.3);
+    background: rgba(0, 0, 0, 0.4);
+    border: 1px solid var(--accent-gold);
     padding: 10px;
     border-radius: 8px;
     text-align: center;
-    min-width: 80px;
+    min-width: 100px;
+    transition: all 0.3s;
 }
 
-.opponent.active { border: 2px solid var(--accent); }
-.opponent.protected { opacity: 0.6; border: 2px dashed yellow; }
-.opponent.out { opacity: 0.3; text-decoration: line-through; }
+.opponent.active {
+    box-shadow: 0 0 15px var(--accent-gold);
+    background: rgba(212, 175, 55, 0.2);
+}
 
+.opponent.protected {
+    border-color: #3498db; /* Blue for Handmaid */
+    box-shadow: 0 0 10px #3498db;
+}
+
+.opponent.out {
+    opacity: 0.5;
+    text-decoration: line-through;
+    filter: grayscale(100%);
+}
+
+/* Play Area */
 #play-area {
     flex-grow: 1;
     display: flex;
@@ -70,68 +151,157 @@ button:disabled { background: #7f8c8d; cursor: not-allowed; }
     align-items: center;
     justify-content: center;
     width: 100%;
+    position: relative;
+}
+
+#removed-cards {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    font-size: 0.9rem;
+    color: #aaa;
+    background: rgba(0,0,0,0.5);
+    padding: 5px;
+    border-radius: 4px;
 }
 
 #log-area {
-    height: 100px;
     width: 90%;
-    background: rgba(0,0,0,0.2);
+    height: 120px;
+    background: rgba(0, 0, 0, 0.3);
+    border: 1px solid #555;
+    border-radius: 5px;
+    padding: 10px;
     overflow-y: auto;
     font-size: 0.9rem;
-    padding: 5px;
     margin-top: 10px;
-    border-radius: 5px;
+    color: #ddd;
+    text-align: left;
+}
+
+/* Player Hand */
+#player-area {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 20px;
 }
 
 #player-hand {
     display: flex;
-    gap: 15px;
-    margin-bottom: 10px;
+    justify-content: center;
+    gap: 20px;
+    margin-bottom: 15px;
 }
 
 .card {
-    width: 100px;
-    height: 140px;
+    width: 120px;
+    height: 170px;
     background: var(--card-bg);
-    color: #2c3e50;
-    border-radius: 8px;
+    border: 2px solid var(--card-border);
+    border-radius: 10px;
+    color: #333;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    border: 3px solid transparent;
     position: relative;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+    box-shadow: 2px 2px 5px rgba(0,0,0,0.5);
     user-select: none;
 }
 
-.card.selected { border-color: var(--accent); transform: translateY(-10px); }
-.card .value { font-size: 1.5rem; font-weight: bold; position: absolute; top: 5px; left: 10px; }
-.card .name { font-weight: bold; font-size: 1rem; }
-.card .desc { font-size: 0.65rem; text-align: center; padding: 5px; }
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 4px 4px 10px rgba(0,0,0,0.6);
+}
 
-/* Modal */
+.card.selected {
+    transform: translateY(-15px) scale(1.05);
+    box-shadow: 0 0 15px var(--accent-gold);
+    border-color: var(--accent-gold);
+}
+
+.card .value {
+    position: absolute;
+    top: 5px;
+    left: 8px;
+    font-size: 1.5rem;
+    font-family: 'Cinzel', serif;
+    font-weight: bold;
+}
+
+.card .name {
+    margin-top: 40px;
+    font-family: 'Cinzel', serif;
+    font-weight: bold;
+    font-size: 1.1rem;
+    border-bottom: 1px solid #aaa;
+    width: 80%;
+    text-align: center;
+    padding-bottom: 5px;
+}
+
+.card .desc {
+    font-size: 0.75rem;
+    text-align: center;
+    padding: 10px;
+    font-style: italic;
+    line-height: 1.2;
+}
+
+/* Modals */
 #modal-overlay {
     position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.8);
+    background: var(--overlay-bg);
     display: flex; justify-content: center; align-items: center;
     z-index: 100;
 }
-.hidden { display: none !important; }
+
 #modal-content {
-    background: #34495e;
-    padding: 20px;
+    background: #3e2b1f;
+    border: 2px solid var(--accent-gold);
+    padding: 30px;
     border-radius: 10px;
     text-align: center;
     max-width: 90%;
+    box-shadow: 0 0 20px rgba(0,0,0,0.8);
 }
+
 .modal-option {
-    display: block;
-    width: 100%;
+    background: #5a3a29;
+    color: var(--text-color);
+    border: 1px solid #888;
     margin: 5px 0;
-    padding: 10px;
-    background: #2c3e50;
-    color: white;
-    border: none;
-    cursor: pointer;
+    width: 100%;
+}
+
+.hidden { display: none !important; }
+
+/* Mobile Responsiveness */
+@media (max-width: 600px) {
+    h1 { font-size: 2rem; }
+
+    .card {
+        width: 90px;
+        height: 130px;
+    }
+    .card .name { font-size: 0.9rem; margin-top: 30px; }
+    .card .desc { font-size: 0.6rem; }
+
+    #opponents-container {
+        gap: 5px;
+    }
+
+    .opponent {
+        min-width: 70px;
+        font-size: 0.8rem;
+        padding: 5px;
+    }
+
+    #log-area {
+        height: 80px;
+        font-size: 0.8rem;
+    }
 }
