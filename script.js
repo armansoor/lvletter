@@ -26,8 +26,92 @@ let state = {
     removedCard: null,
     removedFaceUp: [],
     logs: [],
-    winner: null
+    winner: null,
+    memory: {} // For bots to track revealed cards: { playerId: { cardValue: int, turnSeen: int } }
 };
+
+// --- Sound Manager ---
+class SoundManager {
+    constructor() {
+        this.ctx = null;
+        this.enabled = true;
+    }
+
+    init() {
+        if (!this.ctx) {
+            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+    }
+
+    playTone(freq, type, duration) {
+        if (!this.enabled || !this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
+        gain.gain.setValueAtTime(0.1, this.ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start();
+        osc.stop(this.ctx.currentTime + duration);
+    }
+
+    play(name) {
+        try {
+            this.init();
+            if(this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+
+            switch(name) {
+                case 'turn': this.playTone(440, 'sine', 0.3); break; // A4
+                case 'play': this.playTone(600, 'triangle', 0.1); break;
+                case 'win':
+                    this.playTone(523.25, 'sine', 0.2); // C5
+                    setTimeout(() => this.playTone(659.25, 'sine', 0.2), 200); // E5
+                    setTimeout(() => this.playTone(783.99, 'sine', 0.4), 400); // G5
+                    break;
+                case 'eliminate': this.playTone(150, 'sawtooth', 0.4); break;
+                case 'shuffle':
+                    // Simulate shuffle noise with quick bursts of white noise (approximated)
+                    this.playTone(1000, 'square', 0.05);
+                    setTimeout(() => this.playTone(1200, 'square', 0.05), 50);
+                    break;
+            }
+        } catch (e) {
+            console.error("Audio error:", e);
+        }
+    }
+}
+
+const audio = new SoundManager();
+
+// --- Theme & Help ---
+
+function toggleTheme() {
+    document.body.classList.toggle('light-theme');
+    const btn = document.getElementById('theme-btn');
+    btn.innerText = document.body.classList.contains('light-theme') ? '🌞' : '🌓';
+}
+
+function toggleHelpModal() {
+    const modal = document.getElementById('help-modal-overlay');
+    const content = document.getElementById('card-list');
+
+    if (modal.classList.contains('hidden')) {
+        // Populate
+        content.innerHTML = CARDS.map(c => `
+            <div class="help-card-row">
+                <div style="width: 15%"><strong>${c.value}</strong></div>
+                <div style="width: 25%"><strong>${c.name}</strong> (${c.count})</div>
+                <div style="width: 60%">${c.desc}</div>
+            </div>
+        `).join('');
+        modal.classList.remove('hidden');
+    } else {
+        modal.classList.add('hidden');
+    }
+}
+
 
 // --- Networking (PeerJS) ---
 let peer = null;
@@ -37,18 +121,11 @@ let isHost = false;
 let lobbyPlayers = []; // {id, name}
 
 function initPeer(customId = null) {
-    // Clean up existing peer if any
     if (peer) {
         peer.destroy();
         peer = null;
     }
-
-    const options = { debug: 2 };
-
-    // PeerJS will error if ID is taken, so we need to handle that.
-    // However, the 'open' event is where we know it succeeded.
-    // The 'error' event handles failure.
-
+    const options = { debug: 1 };
     peer = new Peer(customId, options);
 
     peer.on('open', (id) => {
@@ -62,19 +139,15 @@ function initPeer(customId = null) {
     });
 
     peer.on('connection', (c) => {
-        if (!isHost) {
-            c.close();
-            return;
-        }
+        if (!isHost) { c.close(); return; }
         handleIncomingConnection(c);
     });
 
     peer.on('error', (err) => {
         console.error(err);
         if (err.type === 'unavailable-id') {
-            alert("Custom ID is already taken. Please try another.");
+            alert("Custom ID taken.");
             isHost = false;
-            // Maybe reset to menu?
         } else {
             alert("Network Error: " + err.type);
         }
@@ -82,7 +155,6 @@ function initPeer(customId = null) {
 }
 
 function handleIncomingConnection(c) {
-    console.log("Incoming connection from", c.peer);
     c.on('open', () => {
         connections.push(c);
         updateLobbyHost();
@@ -93,7 +165,6 @@ function handleIncomingConnection(c) {
         updateLobbyHost();
         if (state.gameMode === 'multi' && state.players.length > 0) {
             log(`Player ${c.peer} disconnected.`);
-            // In a robust game, we might pause or replace with bot.
         }
     });
 }
@@ -122,41 +193,20 @@ function updateLobbyHost() {
 function joinGame() {
     const destId = document.getElementById('remote-id-input').value;
     if(!destId) return alert("Enter Host ID!");
-
     isHost = false;
-    // Init peer (random ID)
     initPeer();
-    // Wait for open before connecting
-    // Actually initPeer is async in terms of 'open' event.
-    // We should probably init peer FIRST, then connect.
-    // Refactoring: initPeer() is called on 'Multiplayer' menu click?
-    // Wait, previous code called initPeer() in showMultiplayerMenu.
-    // But now we might want custom ID for host.
-    // Client doesn't need custom ID usually.
-
-    // Let's rely on the peer instance created when menu opened.
-    // BUT if host wants custom ID, we destroy and recreate.
-
-    // For client, we just use the existing one or create one if missing.
     if(!peer || peer.destroyed) initPeer();
 
-    // Check if peer is open before connecting
-    if(peer.open) {
-        connectToHost(destId);
-    } else {
-        peer.on('open', () => connectToHost(destId));
-    }
+    if(peer.open) connectToHost(destId);
+    else peer.on('open', () => connectToHost(destId));
 }
 
 function connectToHost(destId) {
     hostConn = peer.connect(destId);
-
     hostConn.on('open', () => {
-        console.log("Connected to host!");
         showLobbyScreen();
-        document.getElementById('lobby-status').innerText = "Connected! Waiting for host to start...";
+        document.getElementById('lobby-status').innerText = "Connected! Waiting for host...";
     });
-
     hostConn.on('data', (data) => handleNetworkData(data, hostConn));
     hostConn.on('close', () => {
         alert("Disconnected from host.");
@@ -168,12 +218,8 @@ function hostGame() {
     isHost = true;
     connections = [];
     const customId = document.getElementById('host-id-input').value.trim();
-    if(customId) {
-        // Re-init with custom ID
-        initPeer(customId);
-        // 'open' handler will show lobby
-    } else {
-        // Use existing random ID (or re-init if needed)
+    if(customId) initPeer(customId);
+    else {
         if(!peer || peer.destroyed) initPeer();
         else {
              showLobbyScreen();
@@ -185,9 +231,7 @@ function hostGame() {
 
 function sendData(type, payload) {
     if (isHost) {
-        connections.forEach(c => {
-            if (c.open) c.send({ type, payload });
-        });
+        connections.forEach(c => { if (c.open) c.send({ type, payload }); });
     } else if (hostConn && hostConn.open) {
         hostConn.send({ type, payload });
     }
@@ -196,12 +240,13 @@ function sendData(type, payload) {
 function handleNetworkData(data, sourceConn) {
     if (data.type === 'SYNC_STATE') {
         state = data.payload;
-        // Restore local ID for view logic
         state.myPlayerId = peer.id;
         renderGame();
-
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active', 'hidden'));
         document.getElementById('game-screen').classList.add('active');
+
+        // Check for personal notifications/sounds in logs maybe?
+        // Or just let log update handle it.
 
     } else if (data.type === 'LOBBY_UPDATE') {
         lobbyPlayers = data.payload;
@@ -222,10 +267,7 @@ function handleNetworkData(data, sourceConn) {
 // --- UI Transitions ---
 
 function showLobbyScreen() {
-    document.querySelectorAll('.screen').forEach(s => {
-        s.classList.remove('active');
-        s.classList.add('hidden');
-    });
+    document.querySelectorAll('.screen').forEach(s => { s.classList.remove('active'); s.classList.add('hidden'); });
     document.getElementById('lobby-screen').classList.remove('hidden');
     document.getElementById('lobby-screen').classList.add('active');
 }
@@ -236,11 +278,7 @@ function updateLobbyUI() {
 }
 
 function showMainMenu() {
-    // If peer exists, destroy it to clean up?
-    if(peer) {
-        peer.destroy();
-        peer = null;
-    }
+    if(peer) { peer.destroy(); peer = null; }
     location.reload();
 }
 
@@ -248,13 +286,11 @@ function showMultiplayerMenu() {
     document.getElementById('menu-screen').classList.remove('active');
     document.getElementById('multiplayer-screen').classList.add('active');
     document.getElementById('multiplayer-screen').classList.remove('hidden');
-    // Pre-init peer with random ID so it's ready, unless they choose Host with Custom
     initPeer();
 }
 
 function quitGame() {
     if(isHost) {
-        // Notify clients?
         sendData('GAME_OVER', {});
         connections.forEach(c => c.close());
         connections = [];
@@ -267,10 +303,21 @@ function quitGame() {
 // --- Game Start ---
 
 function startGame(mode) {
+    // Init Audio Context on user gesture
+    audio.init();
+
     state.gameMode = mode;
     state.players = [];
     state.logs = [];
+    const logArea = document.getElementById('log-area');
+    if(logArea) logArea.innerHTML = ''; // Clear visual log
+
     state.removedFaceUp = [];
+    state.memory = {};
+
+    // Clean up game info buttons (Quit, Play Again)
+    const infoContainer = document.getElementById('game-info');
+    Array.from(infoContainer.querySelectorAll('button')).forEach(b => b.remove());
     
     if (mode === 'single') {
         state.players.push({ id: 0, name: "You", hand: [], discard: [], isProtected: false, isOut: false, type: 'human' });
@@ -281,13 +328,9 @@ function startGame(mode) {
         let count = prompt("How many players? (2-4)", "4");
         count = parseInt(count);
         if(isNaN(count) || count < 2 || count > 4) count = 4;
-
-        for(let i=0; i<count; i++) {
-            state.players.push({ id: i, name: `Player ${i+1}`, hand: [], discard: [], isProtected: false, isOut: false, type: 'human' });
-        }
+        for(let i=0; i<count; i++) state.players.push({ id: i, name: `Player ${i+1}`, hand: [], discard: [], isProtected: false, isOut: false, type: 'human' });
     } else if (mode === 'multi') {
         if (lobbyPlayers.length < 2) return alert("Need at least 2 players!");
-
         lobbyPlayers.forEach(p => {
              state.players.push({ id: p.id, name: p.name, hand: [], discard: [], isProtected: false, isOut: false, type: 'human' });
         });
@@ -298,9 +341,7 @@ function startGame(mode) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active', 'hidden'));
     document.getElementById('game-screen').classList.add('active');
 
-    // Add Quit Button to Game Screen if not there
     addQuitButton();
-
     renderGame();
     
     if (state.gameMode === 'multi' && isHost) syncClients();
@@ -318,7 +359,6 @@ function addQuitButton() {
         btn.style.padding = '5px 10px';
         btn.style.margin = '0';
         btn.onclick = quitGame;
-
         container.appendChild(btn);
     }
 }
@@ -329,14 +369,15 @@ function startRound() {
         for(let i=0; i<card.count; i++) state.deck.push(card);
     });
     
+    // Shuffle
     for (let i = state.deck.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [state.deck[i], state.deck[j]] = [state.deck[j], state.deck[i]];
     }
+    audio.play('shuffle');
 
     state.removedFaceUp = [];
     state.removedCard = null;
-
     state.removedCard = state.deck.pop();
 
     if (state.players.length === 2) {
@@ -354,8 +395,21 @@ function startRound() {
 
     state.currentPlayerIndex = 0;
     state.turnPhase = 'draw';
-    
+    state.memory = {}; // Reset memory
+
     processTurnStart();
+}
+
+function showPassPlayInterstitial(name, callback) {
+    const overlay = document.getElementById('pass-play-overlay');
+    document.getElementById('pass-play-msg').innerText = `${name} Turn`;
+    overlay.classList.remove('hidden');
+
+    const btn = document.getElementById('pass-play-btn');
+    btn.onclick = () => {
+        overlay.classList.add('hidden');
+        callback();
+    };
 }
 
 function processTurnStart() {
@@ -376,11 +430,38 @@ function processTurnStart() {
 
     state.turnPhase = 'play';
     const name = player.name === "You" ? "Your" : `${player.name}'s`;
+
     log(`--- ${name} Turn ---`);
+
+    if (state.gameMode === 'pass') {
+        showPassPlayInterstitial(name, () => {
+            renderGame();
+            const indicator = document.getElementById('turn-indicator');
+            if (indicator) {
+                indicator.innerText = `${name} Turn`;
+                indicator.classList.add('pulse');
+            }
+            audio.play('turn');
+        });
+        return;
+    }
+
+    // Normal flow
+    const indicator = document.getElementById('turn-indicator');
+    if (indicator) {
+        indicator.innerText = `${name} Turn`;
+        if (player.name === "You") {
+            audio.play('turn');
+            indicator.classList.add('pulse');
+        } else {
+            indicator.classList.remove('pulse');
+        }
+    }
+
     renderGame();
 
     if (player.type === 'bot') {
-        setTimeout(() => botPlay(player), 1000 + Math.random() * 1000);
+        setTimeout(() => botPlay(player), 1500);
     }
     if (state.gameMode === 'multi' && isHost) syncClients();
 }
@@ -395,39 +476,72 @@ function botPlay(bot) {
     let targetId = null;
     let guess = 2;
 
+    // 1. Mandatory Moves
     const hasCountess = hand.find(c => c.value === 7);
     const hasRoyalty = hand.find(c => c.value === 5 || c.value === 6);
 
     if (hasCountess && hasRoyalty) {
         cardIdx = hand.indexOf(hasCountess);
     } else {
-        const options = [0, 1];
-        const safeOptions = options.filter(i => hand[i].value !== 8);
-        if (safeOptions.length > 0) {
-            cardIdx = safeOptions[Math.floor(Math.random() * safeOptions.length)];
-        } else {
+        // 2. Strategy based on Difficulty
+        // Simple heuristic: Try not to discard Princess (8)
+        const safeOptions = hand.map((c, i) => i).filter(i => hand[i].value !== 8);
+
+        if (safeOptions.length === 0) {
+            // Must discard Princess (lose)
             cardIdx = 0;
+        } else {
+            // Pick a random safe card for Easy
+            // Harder bots can prioritize
+            if (bot.difficulty === 'hard') {
+                // Prioritize Handmaid (4) > Baron (3) > Guard (1)
+                // Avoid Prince (5) or King (6) unless necessary?
+                // Simplification for now: Pick highest value card that is safe?
+                // Or keep high value?
+                // Let's just pick random safe for now, but use memory for targeting.
+                cardIdx = safeOptions[Math.floor(Math.random() * safeOptions.length)];
+            } else {
+                cardIdx = safeOptions[Math.floor(Math.random() * safeOptions.length)];
+            }
         }
     }
 
     const card = hand[cardIdx];
 
+    // Target Selection
     const validTargets = state.players.filter(p => !p.isOut && !p.isProtected && p.id !== bot.id);
     
-    if (card.value === 5) {
-        if (validTargets.length === 0) targetId = bot.id;
-        else targetId = validTargets[Math.floor(Math.random() * validTargets.length)].id;
-    } else if ([1, 2, 3, 6].includes(card.value)) {
+    if (card.value === 5) { // Prince
+        // If targeting others is possible, do it. Else target self (unless Princess, but logic handled above).
         if (validTargets.length > 0) {
             targetId = validTargets[Math.floor(Math.random() * validTargets.length)].id;
         } else {
-            targetId = null;
+            targetId = bot.id; // Must target self
+        }
+    } else if ([1, 2, 3, 6].includes(card.value)) {
+        if (validTargets.length > 0) {
+            // Smart Targeting
+            if (bot.difficulty === 'hard') {
+                // Target someone we have info on?
+                // Or target leader (most cards in discard?) - score logic
+                targetId = validTargets[0].id; // Simplified
+            } else {
+                targetId = validTargets[Math.floor(Math.random() * validTargets.length)].id;
+            }
+        } else {
+            targetId = null; // Card effect fizzles
         }
     }
 
-    if (card.value === 1) {
-        const possible = [2,3,4,5,6,7,8];
-        guess = possible[Math.floor(Math.random() * possible.length)];
+    // Guard Guessing
+    if (card.value === 1 && targetId !== null) {
+        // Memory Check for Hard Bot
+        if (bot.difficulty === 'hard' && state.memory[targetId]) {
+             guess = state.memory[targetId].cardValue;
+        } else {
+             const possible = [2,3,4,5,6,7,8];
+             guess = possible[Math.floor(Math.random() * possible.length)];
+        }
     }
 
     processMove(cardIdx, targetId, guess);
@@ -451,8 +565,10 @@ document.getElementById('play-btn').addEventListener('click', () => {
     const player = state.players[state.currentPlayerIndex];
     const card = player.hand[selectedHandIdx];
     
-    const otherCard = player.hand[selectedHandIdx === 0 ? 1 : 0];
-    if ((otherCard.value === 6 || otherCard.value === 5) && card.value !== 7 && player.hand.some(c=>c.value===7)) {
+    const hasCountess = player.hand.some(c => c.value === 7);
+    const hasRoyalty = player.hand.some(c => c.value === 5 || c.value === 6);
+
+    if (hasCountess && hasRoyalty && card.value !== 7) {
         alert("You must play the Countess!");
         return;
     }
@@ -540,9 +656,14 @@ function processMove(cardIdx, targetId, guess) {
     const playedCard = player.hand.splice(cardIdx, 1)[0];
     player.discard.push(playedCard);
     
-    let logMsg = `${player.name} plays ${playedCard.name}`;
+    audio.play('play');
+
+    let logMsg = `${player.name} plays <strong>${playedCard.name}</strong>`;
 
     let targetPlayer = state.players.find(p => p.id === targetId);
+
+    // Update Memory: If anyone plays a card, we know they don't have it anymore (obviously)
+    // But specific effects reveal cards.
 
     if (playedCard.value === 8) {
         log(logMsg);
@@ -585,6 +706,13 @@ function processMove(cardIdx, targetId, guess) {
                 const theirCard = targetPlayer.hand[0];
                 player.hand[0] = theirCard;
                 targetPlayer.hand[0] = myCard;
+
+                // Memory Update: Host/Bots know who has what now
+                if(isHost || state.gameMode !== 'multi') {
+                     recordMemory(player.id, theirCard.value);
+                     recordMemory(targetPlayer.id, myCard.value);
+                }
+
                 log("Hands traded.");
             }
             else if (playedCard.value === 3) {
@@ -592,9 +720,9 @@ function processMove(cardIdx, targetId, guess) {
                 const myVal = player.hand[0].value;
                 const theirVal = targetPlayer.hand[0].value;
 
-                if (player.type === 'human' || targetPlayer.type === 'human') {
-                    log(`Baron Compare: ${player.name}(${myVal}) vs ${targetPlayer.name}(${theirVal})`);
-                }
+                // Only players involved see the values in real life, but logic compares.
+                // We'll reveal in log only if human involved or debug.
+                // Actually, standard play: only the two see.
 
                 if (myVal > theirVal) {
                     eliminate(targetPlayer, "Baron comparison");
@@ -602,16 +730,26 @@ function processMove(cardIdx, targetId, guess) {
                     eliminate(player, "Baron comparison");
                 } else {
                     log("It's a tie. No one is out.");
+                    // Tie reveals nothing? Or implies equality?
                 }
             }
             else if (playedCard.value === 2) {
                 log(logMsg);
+                const seenCard = targetPlayer.hand[0];
+
+                // Memory Update
+                if (isHost || state.gameMode !== 'multi') {
+                    recordMemory(targetPlayer.id, seenCard.value);
+                }
+
                 if (player.type === 'human') {
-                    setTimeout(() => alert(`You see ${targetPlayer.name}'s card: ${targetPlayer.hand[0].name}`), 100);
+                    // Show modal or alert
+                    setTimeout(() => alert(`You see ${targetPlayer.name}'s card: ${seenCard.name}`), 100);
                 }
             }
             else if (playedCard.value === 1) {
-                log(logMsg + ` guessing ${CARDS.find(c=>c.value===guess).name}`);
+                const guessName = CARDS.find(c=>c.value===guess).name;
+                log(logMsg + ` guessing <strong>${guessName}</strong>`);
                 if (targetPlayer.hand[0].value === guess) {
                     log("Correct guess!");
                     eliminate(targetPlayer, "Guard guess");
@@ -626,8 +764,13 @@ function processMove(cardIdx, targetId, guess) {
     checkWinCondition();
 }
 
+function recordMemory(playerId, cardValue) {
+    state.memory[playerId] = { cardValue: cardValue, turn: state.logs.length };
+}
+
 function eliminate(player, reason) {
     player.isOut = true;
+    audio.play('eliminate');
     if (player.hand.length > 0) {
         const c = player.hand.pop();
         player.discard.push(c);
@@ -673,9 +816,23 @@ function endRound() {
 
 function endGame(winner) {
     state.winner = winner;
+    audio.play('win');
     log(`*** ${winner.name} Wins the Round! ***`);
     alert(`${winner.name} Wins!`);
     renderGame();
+
+    // Play Again Button
+    const container = document.getElementById('game-info');
+    const btn = document.createElement('button');
+    btn.innerText = "Play Again";
+    btn.className = 'back-btn';
+    btn.style.fontSize = '0.8rem';
+    btn.style.padding = '5px 10px';
+    btn.style.marginLeft = '10px';
+    btn.style.backgroundColor = 'var(--accent)';
+    btn.style.color = '#fff';
+    btn.onclick = () => startGame(state.gameMode);
+    container.appendChild(btn);
 }
 
 function nextTurn() {
@@ -689,9 +846,14 @@ function nextTurn() {
 // --- Utils & UI ---
 
 function log(msg) {
-    state.logs.unshift(msg);
+    state.logs.push(msg); // Push to end
     const area = document.getElementById('log-area');
-    if(area) area.innerHTML = state.logs.map(l => `<div>${l}</div>`).join('');
+    if(area) {
+        const entry = document.createElement('div');
+        entry.innerHTML = msg;
+        area.appendChild(entry);
+        area.scrollTop = area.scrollHeight;
+    }
 }
 
 function syncClients() {
@@ -700,23 +862,20 @@ function syncClients() {
 }
 
 function renderGame() {
-    const playArea = document.getElementById('play-area');
-    let removedArea = document.getElementById('removed-cards');
-    if (!removedArea && state.removedFaceUp.length > 0) {
-        removedArea = document.createElement('div');
-        removedArea.id = 'removed-cards';
-        playArea.prepend(removedArea);
-    }
-    if (removedArea) {
-        removedArea.innerHTML = '<strong>Removed:</strong> ' + state.removedFaceUp.map(c => c.name).join(', ');
-    }
-
+    // Deck Count
     document.getElementById('deck-count').innerText = `Deck: ${state.deck.length}`;
 
-    const curr = state.players[state.currentPlayerIndex];
-    if(curr) {
-        const name = curr.name === "You" ? "Your" : `${curr.name}'s`;
-        document.getElementById('turn-indicator').innerText = `${name} Turn`;
+    // Last Played
+    const lastPlayer = state.players[(state.currentPlayerIndex - 1 + state.players.length) % state.players.length];
+    const display = document.getElementById('active-card-display');
+    if (lastPlayer && lastPlayer.discard.length > 0) {
+        const c = lastPlayer.discard[lastPlayer.discard.length - 1];
+        display.innerHTML = `<div class="card" style="transform: scale(0.6); margin: 0; pointer-events: none;">
+            <div class="value">${c.value}</div>
+            <div class="name">${c.name}</div>
+        </div>`;
+    } else {
+        display.innerHTML = '';
     }
 
     const oppContainer = document.getElementById('opponents-container');
@@ -731,11 +890,14 @@ function renderGame() {
             el.innerHTML = `
                 <div><strong>${p.name}</strong></div>
                 <div>Cards: ${p.hand.length}</div>
-                <div>Score: ${calculateScore(p)}</div>
+                <div>Tiebreaker: ${calculateScore(p)}</div>
             `;
             oppContainer.appendChild(el);
         }
     });
+
+    const playBtn = document.getElementById('play-btn');
+    if (playBtn) playBtn.disabled = (selectedHandIdx === null);
 
     const handContainer = document.getElementById('player-hand');
     handContainer.innerHTML = '';
