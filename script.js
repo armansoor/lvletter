@@ -36,23 +36,48 @@ let hostConn = null; // Client: Connection to Host
 let isHost = false;
 let lobbyPlayers = []; // {id, name}
 
-function initPeer() {
-    // Generate a random ID for easier sharing? No, PeerJS default is fine.
-    peer = new Peer(null, { debug: 2 });
+function initPeer(customId = null) {
+    // Clean up existing peer if any
+    if (peer) {
+        peer.destroy();
+        peer = null;
+    }
+
+    const options = { debug: 2 };
+
+    // PeerJS will error if ID is taken, so we need to handle that.
+    // However, the 'open' event is where we know it succeeded.
+    // The 'error' event handles failure.
+
+    peer = new Peer(customId, options);
+
     peer.on('open', (id) => {
         state.myPlayerId = id;
         document.getElementById('peer-id-display').innerText = `Your ID: ${id}`;
+        if(isHost) {
+             showLobbyScreen();
+             document.getElementById('lobby-status').innerText = "Hosting... Share your ID.";
+             updateLobbyHost();
+        }
     });
+
     peer.on('connection', (c) => {
         if (!isHost) {
-            c.close(); // Only host accepts connections
+            c.close();
             return;
         }
         handleIncomingConnection(c);
     });
+
     peer.on('error', (err) => {
         console.error(err);
-        alert("Network Error: " + err.type);
+        if (err.type === 'unavailable-id') {
+            alert("Custom ID is already taken. Please try another.");
+            isHost = false;
+            // Maybe reset to menu?
+        } else {
+            alert("Network Error: " + err.type);
+        }
     });
 }
 
@@ -66,16 +91,14 @@ function handleIncomingConnection(c) {
     c.on('close', () => {
         connections = connections.filter(conn => conn !== c);
         updateLobbyHost();
-        // If game running, handle disconnect?
         if (state.gameMode === 'multi' && state.players.length > 0) {
             log(`Player ${c.peer} disconnected.`);
-            // Pause or end game? For now just log.
+            // In a robust game, we might pause or replace with bot.
         }
     });
 }
 
 function updateLobbyHost() {
-    // Host updates their own list and broadcasts
     const list = [{id: state.myPlayerId, name: "Host (You)"}];
     connections.forEach((c, i) => {
         list.push({id: c.peer, name: `Player ${i+2}`});
@@ -83,12 +106,10 @@ function updateLobbyHost() {
     lobbyPlayers = list;
     updateLobbyUI();
 
-    // Broadcast
     connections.forEach(c => {
         if(c.open) c.send({ type: 'LOBBY_UPDATE', payload: lobbyPlayers });
     });
 
-    // Enable Start Button if > 1 player
     const btn = document.getElementById('lobby-start-btn');
     if (lobbyPlayers.length >= 2) {
         btn.classList.remove('hidden');
@@ -103,6 +124,31 @@ function joinGame() {
     if(!destId) return alert("Enter Host ID!");
 
     isHost = false;
+    // Init peer (random ID)
+    initPeer();
+    // Wait for open before connecting
+    // Actually initPeer is async in terms of 'open' event.
+    // We should probably init peer FIRST, then connect.
+    // Refactoring: initPeer() is called on 'Multiplayer' menu click?
+    // Wait, previous code called initPeer() in showMultiplayerMenu.
+    // But now we might want custom ID for host.
+    // Client doesn't need custom ID usually.
+
+    // Let's rely on the peer instance created when menu opened.
+    // BUT if host wants custom ID, we destroy and recreate.
+
+    // For client, we just use the existing one or create one if missing.
+    if(!peer || peer.destroyed) initPeer();
+
+    // Check if peer is open before connecting
+    if(peer.open) {
+        connectToHost(destId);
+    } else {
+        peer.on('open', () => connectToHost(destId));
+    }
+}
+
+function connectToHost(destId) {
     hostConn = peer.connect(destId);
 
     hostConn.on('open', () => {
@@ -114,16 +160,27 @@ function joinGame() {
     hostConn.on('data', (data) => handleNetworkData(data, hostConn));
     hostConn.on('close', () => {
         alert("Disconnected from host.");
-        showMainMenu();
+        quitGame();
     });
 }
 
 function hostGame() {
     isHost = true;
     connections = [];
-    showLobbyScreen();
-    document.getElementById('lobby-status').innerText = "Hosting... Share your ID.";
-    updateLobbyHost();
+    const customId = document.getElementById('host-id-input').value.trim();
+    if(customId) {
+        // Re-init with custom ID
+        initPeer(customId);
+        // 'open' handler will show lobby
+    } else {
+        // Use existing random ID (or re-init if needed)
+        if(!peer || peer.destroyed) initPeer();
+        else {
+             showLobbyScreen();
+             document.getElementById('lobby-status').innerText = "Hosting... Share your ID.";
+             updateLobbyHost();
+        }
+    }
 }
 
 function sendData(type, payload) {
@@ -138,37 +195,27 @@ function sendData(type, payload) {
 
 function handleNetworkData(data, sourceConn) {
     if (data.type === 'SYNC_STATE') {
-        // Client receives game state
         state = data.payload;
-        // Restore myPlayerId because sync might overwrite it with Host's view (though we try to avoid that)
-        // Actually, state.myPlayerId should be local.
-        // But if we overwrite 'state' completely, we lose local props not in payload.
-        // We need to ensure state.myPlayerId is correct.
-        // The host sends the 'global' state.
-        // We need to re-attach our local ID or ensure it's not lost.
-        // state.myPlayerId is currently part of state.
-        // Better: store myPlayerId outside state or restore it.
-        const myId = peer.id;
-        state.myPlayerId = myId;
+        // Restore local ID for view logic
+        state.myPlayerId = peer.id;
         renderGame();
 
-        // Ensure we are on game screen
         document.querySelectorAll('.screen').forEach(s => s.classList.remove('active', 'hidden'));
         document.getElementById('game-screen').classList.add('active');
 
     } else if (data.type === 'LOBBY_UPDATE') {
-        // Client receives lobby list
         lobbyPlayers = data.payload;
         updateLobbyUI();
     } else if (data.type === 'ACTION') {
-        // Host receives action from client
         if (isHost) {
-            // Security: verify sourceConn.peer is current player
             const player = state.players[state.currentPlayerIndex];
             if (player.id === sourceConn.peer) {
                 processMove(data.payload.cardIdx, data.payload.targetId, data.payload.guess);
             }
         }
+    } else if (data.type === 'GAME_OVER') {
+        alert("Host ended the game.");
+        quitGame();
     }
 }
 
@@ -189,6 +236,11 @@ function updateLobbyUI() {
 }
 
 function showMainMenu() {
+    // If peer exists, destroy it to clean up?
+    if(peer) {
+        peer.destroy();
+        peer = null;
+    }
     location.reload();
 }
 
@@ -196,7 +248,20 @@ function showMultiplayerMenu() {
     document.getElementById('menu-screen').classList.remove('active');
     document.getElementById('multiplayer-screen').classList.add('active');
     document.getElementById('multiplayer-screen').classList.remove('hidden');
+    // Pre-init peer with random ID so it's ready, unless they choose Host with Custom
     initPeer();
+}
+
+function quitGame() {
+    if(isHost) {
+        // Notify clients?
+        sendData('GAME_OVER', {});
+        connections.forEach(c => c.close());
+        connections = [];
+    } else {
+        if(hostConn) hostConn.close();
+    }
+    showMainMenu();
 }
 
 // --- Game Start ---
@@ -207,15 +272,12 @@ function startGame(mode) {
     state.logs = [];
     state.removedFaceUp = [];
     
-    // Setup Players
     if (mode === 'single') {
         state.players.push({ id: 0, name: "You", hand: [], discard: [], isProtected: false, isOut: false, type: 'human' });
         state.players.push({ id: 1, name: "Bot Easy", hand: [], discard: [], isProtected: false, isOut: false, type: 'bot', difficulty: 'easy' });
         state.players.push({ id: 2, name: "Bot Medium", hand: [], discard: [], isProtected: false, isOut: false, type: 'bot', difficulty: 'medium' });
         state.players.push({ id: 3, name: "Bot Hard", hand: [], discard: [], isProtected: false, isOut: false, type: 'bot', difficulty: 'hard' });
     } else if (mode === 'pass') {
-        // Ask for player count? Defaulting to 4 for now.
-        // Or simple prompt
         let count = prompt("How many players? (2-4)", "4");
         count = parseInt(count);
         if(isNaN(count) || count < 2 || count > 4) count = 4;
@@ -224,7 +286,6 @@ function startGame(mode) {
             state.players.push({ id: i, name: `Player ${i+1}`, hand: [], discard: [], isProtected: false, isOut: false, type: 'human' });
         }
     } else if (mode === 'multi') {
-        // Use lobbyPlayers
         if (lobbyPlayers.length < 2) return alert("Need at least 2 players!");
 
         lobbyPlayers.forEach(p => {
@@ -234,22 +295,40 @@ function startGame(mode) {
 
     startRound();
     
-    // UI Switch
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active', 'hidden'));
     document.getElementById('game-screen').classList.add('active');
+
+    // Add Quit Button to Game Screen if not there
+    addQuitButton();
+
     renderGame();
     
     if (state.gameMode === 'multi' && isHost) syncClients();
 }
 
+function addQuitButton() {
+    let btn = document.getElementById('quit-btn');
+    if(!btn) {
+        const container = document.getElementById('game-info');
+        btn = document.createElement('button');
+        btn.id = 'quit-btn';
+        btn.innerText = "Quit";
+        btn.className = 'back-btn';
+        btn.style.fontSize = '0.8rem';
+        btn.style.padding = '5px 10px';
+        btn.style.margin = '0';
+        btn.onclick = quitGame;
+
+        container.appendChild(btn);
+    }
+}
+
 function startRound() {
-    // 1. Create Deck
     state.deck = [];
     CARDS.forEach(card => {
         for(let i=0; i<card.count; i++) state.deck.push(card);
     });
     
-    // Shuffle
     for (let i = state.deck.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [state.deck[i], state.deck[j]] = [state.deck[j], state.deck[i]];
@@ -257,9 +336,6 @@ function startRound() {
 
     state.removedFaceUp = [];
     state.removedCard = null;
-
-    // Rule: If 2 players, remove 3 cards face up.
-    // Always remove 1 card face down.
 
     state.removedCard = state.deck.pop();
 
@@ -269,7 +345,6 @@ function startRound() {
         }
     }
 
-    // Deal 1 card to each player
     state.players.forEach(p => {
         p.hand = [state.deck.pop()];
         p.discard = [];
@@ -290,10 +365,8 @@ function processTurnStart() {
         return;
     }
     
-    // Protection expires at start of your turn
     player.isProtected = false;
 
-    // Draw Card
     if (state.deck.length > 0) {
         player.hand.push(state.deck.pop());
     } else {
@@ -302,7 +375,8 @@ function processTurnStart() {
     }
 
     state.turnPhase = 'play';
-    log(`--- ${player.name}'s Turn ---`);
+    const name = player.name === "You" ? "Your" : `${player.name}'s`;
+    log(`--- ${name} Turn ---`);
     renderGame();
 
     if (player.type === 'bot') {
@@ -319,33 +393,28 @@ function botPlay(bot) {
     const hand = bot.hand;
     let cardIdx = 0;
     let targetId = null;
-    let guess = 2; // Default guess
+    let guess = 2;
 
-    // Simple Bot Logic (Improved)
-    // 1. Countess Check
     const hasCountess = hand.find(c => c.value === 7);
     const hasRoyalty = hand.find(c => c.value === 5 || c.value === 6);
 
     if (hasCountess && hasRoyalty) {
         cardIdx = hand.indexOf(hasCountess);
     } else {
-        // Randomly pick a card, but try not to play Princess
         const options = [0, 1];
         const safeOptions = options.filter(i => hand[i].value !== 8);
         if (safeOptions.length > 0) {
             cardIdx = safeOptions[Math.floor(Math.random() * safeOptions.length)];
         } else {
-            cardIdx = 0; // Forced to play Princess
+            cardIdx = 0;
         }
     }
 
     const card = hand[cardIdx];
 
-    // Pick Target
     const validTargets = state.players.filter(p => !p.isOut && !p.isProtected && p.id !== bot.id);
     
-    if (card.value === 5) { // Prince
-        // Can target self.
+    if (card.value === 5) {
         if (validTargets.length === 0) targetId = bot.id;
         else targetId = validTargets[Math.floor(Math.random() * validTargets.length)].id;
     } else if ([1, 2, 3, 6].includes(card.value)) {
@@ -356,7 +425,6 @@ function botPlay(bot) {
         }
     }
 
-    // Guess
     if (card.value === 1) {
         const possible = [2,3,4,5,6,7,8];
         guess = possible[Math.floor(Math.random() * possible.length)];
@@ -383,7 +451,6 @@ document.getElementById('play-btn').addEventListener('click', () => {
     const player = state.players[state.currentPlayerIndex];
     const card = player.hand[selectedHandIdx];
     
-    // Check Countess Rule
     const otherCard = player.hand[selectedHandIdx === 0 ? 1 : 0];
     if ((otherCard.value === 6 || otherCard.value === 5) && card.value !== 7 && player.hand.some(c=>c.value===7)) {
         alert("You must play the Countess!");
@@ -397,14 +464,12 @@ document.getElementById('play-btn').addEventListener('click', () => {
         const validOpponents = opponents.filter(p => !p.isProtected);
 
         if (card.value === 5) {
-            // Prince
             if (validOpponents.length === 0) {
                 showTargetModal(card, [player]);
             } else {
                 showTargetModal(card, [...validOpponents, player]);
             }
         } else {
-            // Others
             if (validOpponents.length === 0) {
                 submitMove(selectedHandIdx, null, null);
             } else {
@@ -427,7 +492,7 @@ function showTargetModal(card, targets) {
         btn.className = 'modal-option';
         btn.innerText = p.name + (p.id === state.players[state.currentPlayerIndex].id ? " (You)" : "");
         btn.onclick = () => {
-            if (card.value === 1) { // Guard needs guess
+            if (card.value === 1) {
                 showGuardGuessModal(selectedHandIdx, p.id);
             } else {
                 submitMove(selectedHandIdx, p.id, null);
@@ -631,8 +696,6 @@ function log(msg) {
 
 function syncClients() {
     const cleanState = JSON.parse(JSON.stringify(state));
-    // Optimization: Don't send hand info to clients?
-    // We send full state for now as per plan.
     sendData('SYNC_STATE', cleanState);
 }
 
@@ -651,7 +714,10 @@ function renderGame() {
     document.getElementById('deck-count').innerText = `Deck: ${state.deck.length}`;
 
     const curr = state.players[state.currentPlayerIndex];
-    if(curr) document.getElementById('turn-indicator').innerText = `${curr.name}'s Turn`;
+    if(curr) {
+        const name = curr.name === "You" ? "Your" : `${curr.name}'s`;
+        document.getElementById('turn-indicator').innerText = `${name} Turn`;
+    }
 
     const oppContainer = document.getElementById('opponents-container');
     oppContainer.innerHTML = '';
