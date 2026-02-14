@@ -9,6 +9,11 @@
 </head>
 <body>
     <div id="app">
+        <div id="top-controls">
+            <button id="theme-btn" onclick="toggleTheme()" aria-label="Toggle Theme">🌓</button>
+            <button id="help-btn" onclick="toggleHelpModal()" aria-label="Game Rules">?</button>
+        </div>
+
         <div id="menu-screen" class="screen active">
             <h1>Love Letter</h1>
             <div class="menu-buttons">
@@ -58,7 +63,9 @@
                     <p>Last Played:</p>
                     <div id="active-card-display"></div>
                 </div>
-                <div id="log-area"></div>
+                <div id="log-wrapper">
+                    <div id="log-area"></div>
+                </div>
             </div>
 
             <div id="player-area">
@@ -69,11 +76,31 @@
             </div>
         </div>
 
+        <!-- Target Selection Modal -->
         <div id="modal-overlay" class="hidden">
             <div id="modal-content">
                 <h3 id="modal-title">Select Target</h3>
                 <div id="modal-options"></div>
                 <button onclick="closeModal()">Cancel</button>
+            </div>
+        </div>
+
+        <!-- Help / Card Reference Modal -->
+        <div id="help-modal-overlay" class="hidden" onclick="toggleHelpModal()">
+            <div id="help-modal-content" onclick="event.stopPropagation()">
+                <h3>Card Reference</h3>
+                <div id="card-list">
+                    <!-- Populated by JS -->
+                </div>
+                <button onclick="toggleHelpModal()">Close</button>
+            </div>
+        </div>
+
+        <!-- Pass & Play Interstitial -->
+        <div id="pass-play-overlay" class="hidden">
+            <div id="pass-play-content">
+                <h2 id="pass-play-msg">Player X's Turn</h2>
+                <button id="pass-play-btn">Start Turn</button>
             </div>
         </div>
     </div>
