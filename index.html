@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Love Letter - Web Edition</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+</head>
+<body>
+    <div id="app">
+        <div id="menu-screen" class="screen active">
+            <h1>Love Letter</h1>
+            <div class="menu-buttons">
+                <button onclick="startGame('single')">Single Player (vs Bots)</button>
+                <button onclick="startGame('pass')">Pass & Play</button>
+                <button onclick="showMultiplayerMenu()">Multiplayer (P2P)</button>
+            </div>
+        </div>
+
+        <div id="multiplayer-screen" class="screen hidden">
+            <h2>Multiplayer Setup</h2>
+            <div id="peer-id-display">Connecting to network...</div>
+            <div class="mp-controls">
+                <input type="text" id="remote-id-input" placeholder="Enter Friend's ID">
+                <button onclick="joinGame()">Join Game</button>
+            </div>
+            <div class="divider">OR</div>
+            <div class="mp-controls">
+                <button onclick="hostGame()">Host Game (Wait for join)</button>
+            </div>
+            <button class="back-btn" onclick="showMainMenu()">Back</button>
+        </div>
+
+        <div id="game-screen" class="screen hidden">
+            <div id="game-info">
+                <span id="deck-count">Deck: 0</span>
+                <span id="turn-indicator">Player 1's Turn</span>
+            </div>
+            
+            <div id="opponents-container"></div>
+
+            <div id="play-area">
+                <div id="played-card-slot">
+                    <p>Last Played:</p>
+                    <div id="active-card-display"></div>
+                </div>
+                <div id="log-area"></div>
+            </div>
+
+            <div id="player-area">
+                <div id="player-hand"></div>
+                <div id="player-controls">
+                    <button id="play-btn" disabled>Play Card</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="modal-overlay" class="hidden">
+            <div id="modal-content">
+                <h3 id="modal-title">Select Target</h3>
+                <div id="modal-options"></div>
+                <button onclick="closeModal()">Cancel</button>
+            </div>
+        </div>
+    </div>
+    <script src="game.js"></script>
+</body>
+</html>
